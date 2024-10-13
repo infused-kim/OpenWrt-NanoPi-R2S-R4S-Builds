@@ -7,48 +7,46 @@ if [ ! -e "$ROOTDIR/build" ]; then
 fi
 
 OPENWRT_BRANCH=22.03
+CUSTOMIZATIONS_DIR="$ROOTDIR/openwrt-$OPENWRT_BRANCH/user_customizations/"
 
-cd "$ROOTDIR/build"
+cd "$ROOTDIR/build/openwrt"
 
-# clone stangri repo
-rm -rf stangri_repo
-git clone https://github.com/stangri/source.openwrt.melmac.net stangri_repo
 
-# install feeds
-cd openwrt
-./scripts/feeds update -a
 
-# replace vpn routing packages
-rm -rf feeds/packages/net/vpn-policy-routing/
-cp -R ../stangri_repo/vpn-policy-routing feeds/packages/net/
-rm -rf feeds/luci/applications/luci-app-vpn-policy-routing
-cp -R ../stangri_repo/luci-app-vpn-policy-routing feeds/luci/applications/
+# Execute user customizations script
+CUSTOMIZATIONS_SCRIPT="$CUSTOMIZATIONS_DIR/user_customizations.sh"
+echo -e "\n\nRunning user customizations script $CUSTOMIZATIONS_SCRIPT..."
 
-# add pbr
-cp -R ../stangri_repo/pbr feeds/packages/net/
-cp -R ../stangri_repo/luci-app-pbr feeds/luci/applications/
+if [ -f "$CUSTOMIZATIONS_SCRIPT" ]; then
+  # Source the script
+  source "$CUSTOMIZATIONS_SCRIPT"
+else
+  # Print an error message
+  echo "\Error: User customization script does not exist... not executing" >&2
+fi
 
-# replace acme & haproxy with newer versions taken from master
-rm -rf feeds/packages/net/acme*
-cp -R $ROOTDIR/openwrt-$OPENWRT_BRANCH/patches/package/acme* feeds/packages/net/
-rm -rf feeds/packages/net/haproxy
-cp -R $ROOTDIR/openwrt-$OPENWRT_BRANCH/patches/package/haproxy* feeds/packages/net/
+# Load `CUSTOMIZATIONS_DELETE_PATHES`
+source "$PATCHDIR/patch_settings.sh"
 
-# replace adguardhome with prebuilt latest version
-rm -rf feeds/packages/net/adguardhome
-cp -R $ROOTDIR/openwrt-$OPENWRT_BRANCH/patches/package/adguardhome feeds/packages/net/
+# Delete directories in the openwrt code (to replace them with brand new versions)
+echo -e "\n\nDeleting directories..."
+for path in "${CUSTOMIZATIONS_DELETE_PATHES[@]}"; do
+   full_path="$(realpath "./$path")"
+   echo -e "\t- $full_path"
+   rm -rf "$full_path"
+done
 
+# Sync file_replacement directory into openwrt code directory.
+#  - New files are added
+#  - Existing files are overwritten
+#  - Entire directories (such as a package) can be replaced by adding the path
+#    to the `DELETE PATHES` variable above
+echo -e "\n\nRsyncing file_replacements to $(realpath "./")..."
+rsync -avz $PATCHDIR/file_replacements/ .
+
+# Update & install feeds
+echo -e "\n\nUpdating and installing feeds..."
 ./scripts/feeds update -i && ./scripts/feeds install -a
 
-# Time stamp with $Build_Date=$(date +%Y.%m.%d)
-MANUAL_DATE="$(date +%Y.%m.%d) (manual build)"
-BUILD_STRING=${BUILD_STRING:-$MANUAL_DATE}
-echo "Write build date in openwrt : $BUILD_DATE"
-echo -e '\nAO Build@'${BUILD_STRING}'\n'  >> package/base-files/files/etc/banner
-#sed -i '/DISTRIB_REVISION/d' package/base-files/files/etc/openwrt_release
-#echo "DISTRIB_REVISION='${BUILD_STRING}'" >> package/base-files/files/etc/openwrt_release
-sed -i '/DISTRIB_DESCRIPTION/d' package/base-files/files/etc/openwrt_release
-echo "DISTRIB_DESCRIPTION='AO Build@${BUILD_STRING}'" >> package/base-files/files/etc/openwrt_release
-sed -i '/luciversion/d' feeds/luci/modules/luci-base/luasrc/version.lua
 
 rm -rf .config
